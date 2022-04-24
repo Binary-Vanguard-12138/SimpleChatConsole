@@ -9,16 +9,53 @@ void usage() {
 }
 
 #define MAX_CLIENT_NUMBER	30
+#define MAX_CLIENT_NAME_LEN	0x40
+
 SOCKET g_asClientSockets[MAX_CLIENT_NUMBER] = {};
+char g_aszClientNames[MAX_CLIENT_NUMBER][MAX_CLIENT_NAME_LEN] = {};
+
+void addLog(char* szContent, int nLen) {
+	FILE* pfLogFile = NULL;
+	if (NULL == szContent || /*strlen(szContent) == 0 || */0 == nLen)
+		return;
+
+	int err = fopen_s(&pfLogFile, LOG_FILE_NAME, "ab");
+	if (NULL == pfLogFile) {
+		return;
+	}
+	fwrite(szContent, sizeof(char), nLen, pfLogFile);
+	fwrite("\n", sizeof(char), 1, pfLogFile);
+	fclose(pfLogFile);
+}
 
 void removeClient(SOCKET s) {
 	int i;
 	for (i = 0; i < MAX_CLIENT_NUMBER; i++) {
 		if (0 != g_asClientSockets[i] && g_asClientSockets[i] == s) {
 			g_asClientSockets[i] = 0;
+			memset(g_aszClientNames[i], 0, MAX_CLIENT_NAME_LEN);
 			closesocket(s);
 		}
 	}
+}
+
+char* getConnectedClientList() {
+	static char s_szBuffer[MAX_CLIENT_NUMBER * MAX_CLIENT_NAME_LEN] = {};
+	int i;
+	memset(s_szBuffer, 0, sizeof(s_szBuffer));
+	bool bFirst = true;
+	for (i = 0; i < MAX_CLIENT_NUMBER; i++) {
+		if (0 != g_asClientSockets[i]) {
+			if (bFirst) {
+				bFirst = false;
+			}
+			else {
+				strcat_s(s_szBuffer, ", ");
+			}
+			strcat_s(s_szBuffer, g_aszClientNames[i]);
+		}
+	}
+	return s_szBuffer;
 }
 
 int getConnectedClientCount() {
@@ -42,14 +79,23 @@ int main(int argc, char* argv[])
 	int nTcpClientAddrLen = 0, nUdpClientAddrLen = 0;
 	fd_set readfds;
 	int max_sd, sd, activity;
-	struct timeval tSvrTimeOut = {5, 0};
+	struct timeval tSvrTimeOut = {1, 0};
 	char szRecvBuffer[0x400] = {}, szSendBuffer[0x400] = {};
 	int nRecvLen = 0, nSentLen = 0;
+	FILE* pfLogFile = NULL;
 
 	if (3 > argc) {
 		usage();
 		goto end;
 	}
+
+	// truncate the log file.
+	err = fopen_s(&pfLogFile, LOG_FILE_NAME, "w");
+	if (NULL == pfLogFile) {
+		printf("Failed to open log file in %s, errno = %d\n", LOG_FILE_NAME, err);
+		goto end;
+	}
+	fclose(pfLogFile);
 
 	nTcpPort = atoi(argv[1]);
 	nUdpPort = atoi(argv[2]);
@@ -103,7 +149,6 @@ int main(int argc, char* argv[])
 		activity = select(max_sd + 1, &readfds, NULL, NULL, &tSvrTimeOut);
 
 		if (0 == activity) {
-			printf("select return 0.\n");
 			continue;
 		}
 		if ((SOCKET_ERROR == activity) && (errno != EINTR))
@@ -156,32 +201,56 @@ int main(int argc, char* argv[])
 					//Close the socket and mark as 0 in list for reuse
 					removeClient(sd);
 				}
-				//Echo back the message that came in
 				else
 				{
 					getpeername(sd, (struct sockaddr*) & tTcpClientAddr, (socklen_t*)& nTcpClientAddrLen);
 					printf("received %d bytes from client [%s:%d], content is \n%s\n", nRecvLen, my_inet_ntoa(tTcpClientAddr.sin_addr), ntohs(tTcpClientAddr.sin_port), szRecvBuffer);
+					addLog(szRecvBuffer, nRecvLen);
 					if (0 == strncmp(szRecvBuffer, CMD_REGISTER, strlen(CMD_REGISTER))) {
 						if (getConnectedClientCount() >= MAX_CLIENT_NUMBER) {
 							send(sCliTcpSocket, STATUS_SV_FULL, strlen(STATUS_SV_FULL), 0);
 						}
 						else {
 							send(sCliTcpSocket, STATUS_SV_SUCCESS, strlen(STATUS_SV_SUCCESS), 0);
+							strncpy_s(g_aszClientNames[i], szRecvBuffer + strlen(CMD_REGISTER) + 1, MAX_CLIENT_NAME_LEN - 1);
+							printf("Registered new user with name [%s]\n", g_aszClientNames[i]);
 						}
 					}
 					else if (!strcmp(szRecvBuffer, CMD_EXIT)) {
 						removeClient(sd);
 					}
 					else if (!strcmp(szRecvBuffer, CMD_GET_LIST)) {
-
+						if (getConnectedClientCount() == 0) {
+							send(sCliTcpSocket, STATUS_EMPTY, strlen(STATUS_EMPTY), 0);
+						}
+						else {
+							char* szList = getConnectedClientList();
+							send(sCliTcpSocket, szList, strlen(szList), 0);
+						}
 					}
 					else if (!strcmp(szRecvBuffer, CMD_GET_LOG)) {
-
+						err = fopen_s(&pfLogFile, LOG_FILE_NAME, "rb");
+						if (NULL != pfLogFile) {
+							fseek(pfLogFile, 0L, SEEK_END);
+							long lFileSize = ftell(pfLogFile);
+							long lOffset = 0;
+							send(sCliTcpSocket, (const char*)&lFileSize, sizeof(lFileSize), 0);
+							fseek(pfLogFile, 0L, SEEK_SET);
+							while (TRUE) {
+								memset(szSendBuffer, 0, sizeof(szSendBuffer));
+								int nReadLen = fread(szSendBuffer, sizeof(char), _countof(szSendBuffer), pfLogFile);
+								if (0 >= nReadLen)
+									break;
+								send(sCliTcpSocket, szSendBuffer, nReadLen, 0);
+							}
+							fclose(pfLogFile);
+						}
 					}
 					else {
-						printf(szRecvBuffer);
+						//printf(szRecvBuffer);
 						//set the string terminating NULL byte on the end of the data read
 						//szRecvBuffer[nRecvLen] = '\0';
+						// simply echo to client.
 						send(sd, szRecvBuffer, strlen(szRecvBuffer), 0);
 					}
 				}
@@ -205,6 +274,7 @@ end:
 	if (INVALID_SOCKET != sSvrUdpSocket)
 		closesocket(sSvrUdpSocket);
 	WSACleanup();
+
 	return 0;
 }
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu

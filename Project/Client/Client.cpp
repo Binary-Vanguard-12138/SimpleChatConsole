@@ -59,8 +59,12 @@ int main(int argc, char* argv[])
 	}
 	printf("connected to server on %s:%d\n", my_inet_ntoa(tTcpSvrAddr.sin_addr), usSvrPort);
 
-	printf("please input your name.\n");
-	gets_s(szUserName);
+	while (TRUE) {
+		printf("please input your name.\n");
+		gets_s(szUserName);
+		if (strlen(szUserName) > 0)
+			break;
+	}
 	snprintf(szSendBuf, _countof(szSendBuf) - 1, "$register %s", szUserName);
 	nSentLen = send_cmd_to_tcp_server(nCliTcpSocket, szSendBuf);
 	if (SOCKET_ERROR == nSentLen) {
@@ -83,21 +87,55 @@ int main(int argc, char* argv[])
 	 }
 
 	 while (TRUE) {
-		 printf("please input your command\n$exit, $getlist, and $getlog or chat message\n");
-		 memset(szCommand, 0, sizeof(szCommand));
-		 gets_s(szCommand);
+		 while (TRUE) {
+			 printf("please input your command\n$exit, $getlist, and $getlog or chat message\n");
+			 memset(szCommand, 0, sizeof(szCommand));
+			 gets_s(szCommand);
+			 if (strlen(szCommand) > 0)
+				 break;
+		 }
 		 send_cmd_to_tcp_server(nCliTcpSocket, szCommand);
 		 memset(szRecvBuf, 0, sizeof(szRecvBuf));
-		 nRecvLen = recv(nCliTcpSocket, szRecvBuf, sizeof(szRecvBuf), 0);
-		 if (SOCKET_ERROR == nRecvLen) {
-			 printf("Failed to recv command from server, errno = %d\n", WSAGetLastError());
-			 goto end;
+		 if (!strcmp(szCommand, CMD_GET_LOG)) {
+			 long lFileSize = 0;
+			 recv(nCliTcpSocket, (char*)&lFileSize, sizeof(lFileSize), 0);
+			 if (0 < lFileSize) {
+				 char szFileName[0x100] = {};
+				 _snprintf_s(szFileName, _countof(szFileName) - 1, "%s.log", szUserName);
+				 FILE* pfLog = NULL;
+				 err = fopen_s(&pfLog, szFileName, "wb");
+				 if (NULL == pfLog) {
+					 printf("Failed to open log file %s, errno = %d\n", szFileName, err);
+				 }
+				 else {
+					 long lOffset = 0;
+					 while (true)
+					 {
+						 nRecvLen = recv(nCliTcpSocket, szRecvBuf, sizeof(szRecvBuf), 0);
+						 if (0 >= nRecvLen)
+							 break;
+						 fwrite(szRecvBuf, sizeof(char), nRecvLen, pfLog);
+						 lOffset += nRecvLen;
+						 if (lOffset >= lFileSize)
+							 break;
+					 }
+					 fclose(pfLog);
+					 printf("received %d bytes of log file to %s.\n", lFileSize, szFileName);
+				 }
+			 }
 		 }
-		 else if (0 == nRecvLen) {
-			 printf("server closed the client socket.\n");
-			 goto end;
+		 else {
+			 nRecvLen = recv(nCliTcpSocket, szRecvBuf, sizeof(szRecvBuf), 0);
+			 if (SOCKET_ERROR == nRecvLen) {
+				 printf("Failed to recv command from server, errno = %d\n", WSAGetLastError());
+				 goto end;
+			 }
+			 else if (0 == nRecvLen) {
+				 printf("server closed the client socket.\n");
+				 goto end;
+			 }
+			 printf("recv %d bytes from server, content is \n%s\n", nRecvLen, szRecvBuf);
 		 }
-		 printf("recv %d bytes from server, content is \n%s\n", nRecvLen, szRecvBuf);
 	 }
 end:
 	if (INVALID_SOCKET != nCliTcpSocket)
