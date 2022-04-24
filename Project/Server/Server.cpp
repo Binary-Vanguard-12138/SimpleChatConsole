@@ -80,7 +80,7 @@ int main(int argc, char* argv[])
 	u_short nTcpSvrPort = 0, nUdpSvrPort = 0, nUdpCliPort = 0;
 	int nTcpClientAddrLen = 0, nUdpClientAddrLen = 0;
 	fd_set readfds;
-	int max_sd, sd, activity;
+	int max_sd, activity;
 	struct timeval tSvrTimeOut = {1, 0};
 	char szRecvBuffer[0x400] = {}, szSendBuffer[0x400] = {};
 	int nRecvLen = 0, nSentLen = 0;
@@ -173,15 +173,15 @@ int main(int argc, char* argv[])
 		max_sd = nSvrTcpSocket;
 		for (i = 0; i < MAX_CLIENT_NUMBER; i++) {
 			//socket descriptor
-			sd = g_asClientSockets[i];
+			sCliTcpSocket = g_asClientSockets[i];
 
 			//if valid socket descriptor then add to read list
-			if (sd > 0)
-				FD_SET(sd, &readfds);
+			if (sCliTcpSocket > 0)
+				FD_SET(sCliTcpSocket, &readfds);
 
 			//highest file descriptor number, need it for the select function
-			if (sd > max_sd)
-				max_sd = sd;
+			if (sCliTcpSocket > max_sd)
+				max_sd = sCliTcpSocket;
 		}
 
 		activity = select(max_sd + 1, &readfds, NULL, NULL, &tSvrTimeOut);
@@ -226,25 +226,25 @@ int main(int argc, char* argv[])
 		//else its some IO operation on some other socket :)
 		for (i = 0; i < MAX_CLIENT_NUMBER; i++)
 		{
-			sd = g_asClientSockets[i];
-			if (0 == sd)
+			sCliTcpSocket = g_asClientSockets[i];
+			if (0 == sCliTcpSocket)
 				continue;
-			if (FD_ISSET(sd, &readfds))
+			if (FD_ISSET(sCliTcpSocket, &readfds))
 			{
 				//Check if it was for closing , and also read the incoming message
 				memset(szRecvBuffer, 0, sizeof(szRecvBuffer));
-				nRecvLen = recv(sd, szRecvBuffer, sizeof(szRecvBuffer), 0);
+				nRecvLen = recv(sCliTcpSocket, szRecvBuffer, sizeof(szRecvBuffer), 0);
 				if (0 == nRecvLen || SOCKET_ERROR == nRecvLen)
 				{
 					//Somebody disconnected , get his details and print
-					getpeername(sd, (struct sockaddr*) & tTcpClientAddr, (socklen_t*)& nTcpClientAddrLen);
+					getpeername(sCliTcpSocket, (struct sockaddr*) & tTcpClientAddr, (socklen_t*)& nTcpClientAddrLen);
 					printf("Host disconnected , ip %s , port %d \n", my_inet_ntoa(tTcpClientAddr.sin_addr), ntohs(tTcpClientAddr.sin_port));
 					//Close the socket and mark as 0 in list for reuse
-					removeClient(sd);
+					removeClient(sCliTcpSocket);
 				}
 				else
 				{
-					getpeername(sd, (struct sockaddr*) & tTcpClientAddr, (socklen_t*)& nTcpClientAddrLen);
+					getpeername(sCliTcpSocket, (struct sockaddr*) & tTcpClientAddr, (socklen_t*)& nTcpClientAddrLen);
 					printf("received %d bytes from client [%s:%d], content is \n%s\n", nRecvLen, my_inet_ntoa(tTcpClientAddr.sin_addr), ntohs(tTcpClientAddr.sin_port), szRecvBuffer);
 					addLog(szRecvBuffer, nRecvLen);
 					if (0 == strncmp(szRecvBuffer, CMD_REGISTER, strlen(CMD_REGISTER))) {
@@ -258,7 +258,7 @@ int main(int argc, char* argv[])
 						}
 					}
 					else if (!strcmp(szRecvBuffer, CMD_EXIT)) {
-						removeClient(sd);
+						removeClient(sCliTcpSocket);
 					}
 					else if (!strcmp(szRecvBuffer, CMD_GET_LIST)) {
 						if (getConnectedClientCount() == 0) {
@@ -292,7 +292,7 @@ int main(int argc, char* argv[])
 						//set the string terminating NULL byte on the end of the data read
 						//szRecvBuffer[nRecvLen] = '\0';
 						// simply echo to client.
-						send(sd, szRecvBuffer, strlen(szRecvBuffer), 0);
+						send(sCliTcpSocket, szRecvBuffer, strlen(szRecvBuffer), 0);
 					}
 				}
 			}
