@@ -5,7 +5,9 @@
 #include "../Client/NetLib.h"
 
 void usage() {
-	printf("server.exe <tcp_listen_port> <udp_listen_port>");
+	printf("server.exe <tcp_server_ip> <tcp_listen_port> <udp_bind_port> <udp_broadcast_addr> <udp_broadcast_port>\n");
+	printf("For example\n");
+	printf("server.exe 192.168.10.2 4444 5555 192.168.0.0 6666\n");
 }
 
 #define MAX_CLIENT_NUMBER	30
@@ -74,8 +76,8 @@ int main(int argc, char* argv[])
 	int i, err = 0;
 	struct sockaddr_in tTcpSvrAddr = {}, tUdpSvrAddr = {}, tTcpClientAddr = {}, tUdpClientAddr = {};
 	WSADATA wsaData = {};
-	
-	u_short nTcpPort = 0, nUdpPort = 0;
+	char* szServerAddr = NULL, *szBroadcastAddr = NULL;
+	u_short nTcpSvrPort = 0, nUdpSvrPort = 0, nUdpCliPort = 0;
 	int nTcpClientAddrLen = 0, nUdpClientAddrLen = 0;
 	fd_set readfds;
 	int max_sd, sd, activity;
@@ -83,8 +85,11 @@ int main(int argc, char* argv[])
 	char szRecvBuffer[0x400] = {}, szSendBuffer[0x400] = {};
 	int nRecvLen = 0, nSentLen = 0;
 	FILE* pfLogFile = NULL;
+	char chBroadCastEnable = 1;
+	int bReuseAddr = 1;
+	int nArgs = 1;
 
-	if (3 > argc) {
+	if (6 > argc) {
 		usage();
 		goto end;
 	}
@@ -97,8 +102,12 @@ int main(int argc, char* argv[])
 	}
 	fclose(pfLogFile);
 
-	nTcpPort = atoi(argv[1]);
-	nUdpPort = atoi(argv[2]);
+	// read paramters
+	szServerAddr = argv[nArgs++];
+	nTcpSvrPort = atoi(argv[nArgs ++]);
+	nUdpSvrPort = atoi(argv[nArgs++]);
+	szBroadcastAddr = argv[nArgs++];
+	nUdpCliPort = atoi(argv[nArgs++]);
 	
 	//initialise all client_socket[] to 0 so not checked
 	for (i = 0; i < MAX_CLIENT_NUMBER; i++)
@@ -116,10 +125,11 @@ int main(int argc, char* argv[])
 		goto end;
 	}
 	tTcpSvrAddr.sin_family = AF_INET;
-	tTcpSvrAddr.sin_addr.s_addr = INADDR_ANY;
-	tTcpSvrAddr.sin_port = htons(nTcpPort);
+	//tTcpSvrAddr.sin_addr.s_addr = INADDR_ANY;
+	inet_pton(AF_INET, szServerAddr, &tTcpSvrAddr.sin_addr);
+	tTcpSvrAddr.sin_port = htons(nTcpSvrPort);
 	if (0 != bind(nSvrTcpSocket, (struct sockaddr*) & tTcpSvrAddr, sizeof(tTcpSvrAddr))) {
-		printf("bind on %d port failed, errno = %d\n", nTcpPort, WSAGetLastError());
+		printf("bind TCP on %d port failed, errno = %d\n", nTcpSvrPort, WSAGetLastError());
 		goto end;
 	}
 
@@ -127,7 +137,35 @@ int main(int argc, char* argv[])
 		printf("listen on tcp server socket failed. errno = %d\n", WSAGetLastError());
 		goto end;
 	}
-	printf("TCP server is listening or port %d\n", nTcpPort);
+	printf("TCP server is listening on address [%s:%d]\n", my_inet_ntoa(tTcpSvrAddr.sin_addr), nTcpSvrPort);
+
+	// Phase 2
+	sSvrUdpSocket = socket(AF_INET, SOCK_DGRAM, 0/*IPPROTO_UDP*/);
+	if (INVALID_SOCKET == sSvrUdpSocket) {
+		printf("create udp server socket failed, errno = %d\n", WSAGetLastError());
+		goto end;
+	}
+	if (SOCKET_ERROR == setsockopt(sSvrUdpSocket, SOL_SOCKET, SO_BROADCAST, &chBroadCastEnable, sizeof(chBroadCastEnable))) {
+		printf("setsockopt for udp SO_BROADCAST socket failed, errno = %d\n", WSAGetLastError());
+		goto end;
+	}
+	if (SOCKET_ERROR == setsockopt(sSvrUdpSocket, SOL_SOCKET, SO_REUSEADDR, (const char*)& bReuseAddr, sizeof(bReuseAddr))) {
+		printf("setsockopt for udp SO_REUSEADDR socket failed, errno = %d\n", WSAGetLastError());
+		goto end;
+	}
+	tUdpSvrAddr.sin_family = AF_INET;
+	tUdpSvrAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+	tUdpSvrAddr.sin_port = htons(nUdpSvrPort);
+	if (0 != bind(sSvrUdpSocket, (struct sockaddr*) & tUdpSvrAddr, sizeof(tUdpSvrAddr))) {
+		printf("bind UDP on %d port failed, errno = %d\n", nUdpSvrPort, WSAGetLastError());
+		goto end;
+	}
+
+	memset(&tUdpClientAddr, 0, sizeof(tUdpClientAddr));
+	tUdpClientAddr.sin_family = AF_INET;
+	tUdpClientAddr.sin_port = htons(nUdpCliPort);
+// 	inet_addr(szBroadcastAddr);
+	inet_pton(AF_INET, szBroadcastAddr, &tUdpClientAddr.sin_addr);
 
 	while (TRUE) {
 		FD_ZERO(&readfds);
@@ -149,6 +187,8 @@ int main(int argc, char* argv[])
 		activity = select(max_sd + 1, &readfds, NULL, NULL, &tSvrTimeOut);
 
 		if (0 == activity) {
+			// Send UDP broadcast message
+			sendto(sSvrUdpSocket, (const char*)& tTcpSvrAddr, sizeof(tTcpSvrAddr), 0, (struct sockaddr*)& tUdpClientAddr, sizeof(tUdpClientAddr));
 			continue;
 		}
 		if ((SOCKET_ERROR == activity) && (errno != EINTR))
@@ -156,6 +196,7 @@ int main(int argc, char* argv[])
 			printf("select error");
 			break;
 		}
+
 
 		//If something happened on the master socket , then its an incoming connection
 		if (FD_ISSET(nSvrTcpSocket, &readfds))
@@ -193,7 +234,7 @@ int main(int argc, char* argv[])
 				//Check if it was for closing , and also read the incoming message
 				memset(szRecvBuffer, 0, sizeof(szRecvBuffer));
 				nRecvLen = recv(sd, szRecvBuffer, sizeof(szRecvBuffer), 0);
-				if (0 == nRecvLen || INVALID_SOCKET == nRecvLen)
+				if (0 == nRecvLen || SOCKET_ERROR == nRecvLen)
 				{
 					//Somebody disconnected , get his details and print
 					getpeername(sd, (struct sockaddr*) & tTcpClientAddr, (socklen_t*)& nTcpClientAddrLen);
@@ -259,15 +300,6 @@ int main(int argc, char* argv[])
 	}
 
 
-	// Phase 2
-	sSvrUdpSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (INVALID_SOCKET == sSvrUdpSocket) {
-		printf("create udp server socket failed, errno = %d\n", WSAGetLastError());
-		goto end;
-	}
-	tUdpSvrAddr.sin_family = AF_INET;
-	tUdpSvrAddr.sin_addr.s_addr = INADDR_ANY;
-	tUdpSvrAddr.sin_port = htons(nUdpPort);
 end:
 	if (INVALID_SOCKET != nSvrTcpSocket)
 		closesocket(nSvrTcpSocket);
