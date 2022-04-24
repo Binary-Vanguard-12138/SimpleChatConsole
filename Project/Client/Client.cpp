@@ -2,10 +2,111 @@
 //
 
 #include <iostream>
+#include "NetLib.h"
 
-int main()
+void usage() {
+	printf("client <server_address> <server_port>");
+}
+
+int send_cmd_to_tcp_server(SOCKET sSocket, char* szContent) {
+	if (INVALID_SOCKET == sSocket || NULL == szContent || 0 >= strlen(szContent)) {
+		return INVALID_SOCKET;
+	}
+	int nLen = strlen(szContent);
+	int nSentLen = send(sSocket, szContent, nLen, 0);
+	if (SOCKET_ERROR == nSentLen) {
+		printf("Failed to send to tcp server, errno = %d\n", WSAGetLastError());
+		return INVALID_SOCKET;
+	}
+	return nSentLen;
+}
+
+int main(int argc, char* argv[])
 {
-    std::cout << "Hello World!\n"; 
+	SOCKET  nCliTcpSocket = INVALID_SOCKET, sCliUdpSocket = INVALID_SOCKET;
+	struct sockaddr_in tTcpSvrAddr = {}, tUdpSvrAddr = {};
+	char* szSvrAddress = NULL;
+	char szUserName[0x40] = {};
+	char szSendBuf[0x100] = {}, szRecvBuf[0x100] = {}, szCommand[0x100] = {};
+	u_short usSvrPort = 0;
+	int nRecvLen = 0, nSentLen = 0, err = 0;
+	WSADATA wsaData = {};
+	if (3 > argc) {
+		usage();
+		goto end;
+	}
+	szSvrAddress = argv[1];
+	usSvrPort = atoi(argv[2]);
+
+	err = WSAStartup(MAKEWORD(2, 2), &wsaData);
+	if (0 != err) {
+		printf("WSAStartup failed with errno = %d\n", err);
+		goto end;
+	}
+
+	nCliTcpSocket = socket(AF_INET, SOCK_STREAM, 0);
+	if (INVALID_SOCKET == nCliTcpSocket) {
+		printf("create tcp client socket failed, errno = %d\n", WSAGetLastError());
+		goto end;
+	}
+
+	tTcpSvrAddr.sin_family = AF_INET;
+	inet_pton(AF_INET, szSvrAddress, &tTcpSvrAddr.sin_addr);
+	tTcpSvrAddr.sin_port = htons(usSvrPort);
+	if (SOCKET_ERROR == connect(nCliTcpSocket, (struct sockaddr*) & tTcpSvrAddr, sizeof(tTcpSvrAddr))) {
+		printf("connect to server failed errno = %d\n", WSAGetLastError());
+		goto end;
+	}
+	printf("connected to server on %s:%d\n", my_inet_ntoa(tTcpSvrAddr.sin_addr), usSvrPort);
+
+	printf("please input your name.\n");
+	gets_s(szUserName);
+	snprintf(szSendBuf, _countof(szSendBuf) - 1, "$register %s", szUserName);
+	nSentLen = send_cmd_to_tcp_server(nCliTcpSocket, szSendBuf);
+	if (SOCKET_ERROR == nSentLen) {
+		printf("Failed to send $register command to server, errno = %d\n", WSAGetLastError());
+		goto end;
+	}
+	 nRecvLen = recv(nCliTcpSocket, szRecvBuf, sizeof(szRecvBuf), 0);
+	 if (SOCKET_ERROR == nRecvLen) {
+		 printf("Failed to recv command from server, errno = %d\n", WSAGetLastError());
+		 goto end;
+	 }
+	 printf("recv %d bytes from server, content is \n%s\n", nRecvLen, szRecvBuf);
+	 if (strcmp(szRecvBuf, "sv_full") == 0) {
+		 printf("Server is full, exiting client\n");
+		 goto end;
+	 }
+	 else if (strcmp(szRecvBuf, "sv_success")) {
+		 printf("Unknown server command, exiting client...\n");
+		 goto end;
+	 }
+
+	 while (TRUE) {
+		 printf("please input your command\n$exit, $getlist, and $getlog or chat message\n");
+		 memset(szCommand, 0, sizeof(szCommand));
+		 gets_s(szCommand);
+		 send_cmd_to_tcp_server(nCliTcpSocket, szCommand);
+		 memset(szRecvBuf, 0, sizeof(szRecvBuf));
+		 nRecvLen = recv(nCliTcpSocket, szRecvBuf, sizeof(szRecvBuf), 0);
+		 if (SOCKET_ERROR == nRecvLen) {
+			 printf("Failed to recv command from server, errno = %d\n", WSAGetLastError());
+			 goto end;
+		 }
+		 else if (0 == nRecvLen) {
+			 printf("server closed the client socket.\n");
+			 goto end;
+		 }
+		 printf("recv %d bytes from server, content is \n%s\n", nRecvLen, szRecvBuf);
+	 }
+end:
+	if (INVALID_SOCKET != nCliTcpSocket)
+		closesocket(nCliTcpSocket);
+	if (INVALID_SOCKET != sCliUdpSocket)
+		closesocket(sCliUdpSocket);
+	WSACleanup();
+	printf("Client is now exiting...\n");
+	return 0;
 }
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu
