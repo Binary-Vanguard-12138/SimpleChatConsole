@@ -149,11 +149,11 @@ int main(int argc, char* argv[])
 		 goto end;
 	 }
 	 printf("recv %d bytes from server, content is \n%s\n", nRecvLen, szRecvBuf);
-	 if (strcmp(szRecvBuf, "sv_full") == 0) {
+	 if (strcmp(szRecvBuf, STATUS_SV_FULL) == 0) {
 		 printf("Server is full, exiting client\n");
 		 goto end;
 	 }
-	 else if (strcmp(szRecvBuf, "sv_success")) {
+	 else if (strcmp(szRecvBuf, STATUS_SV_SUCCESS)) {
 		 printf("Unknown server command, exiting client...\n");
 		 goto end;
 	 }
