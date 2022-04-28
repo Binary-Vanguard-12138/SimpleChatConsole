@@ -7,7 +7,7 @@
 void usage() {
 	printf("server.exe <tcp_server_ip> <tcp_listen_port> <udp_bind_port> <udp_broadcast_addr> <udp_broadcast_port>\n");
 	printf("For example\n");
-	printf("server.exe 192.168.10.2 4444 5555 192.168.0.0 6666\n");
+	printf("server.exe 192.168.10.2 4444 5555 192.168.255.255 6666\n");
 }
 
 #define MAX_CLIENT_NUMBER	30
