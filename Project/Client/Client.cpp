@@ -116,6 +116,9 @@ int main(int argc, char* argv[])
 		}
 	}
 
+	closesocket(sCliUdpSocket);
+	sCliUdpSocket = INVALID_SOCKET;
+
 	sCliTcpSocket = socket(AF_INET, SOCK_STREAM, 0);
 	if (INVALID_SOCKET == sCliTcpSocket) {
 		printf("create tcp client socket failed, errno = %d\n", WSAGetLastError());
